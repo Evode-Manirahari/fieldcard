@@ -1,36 +1,49 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# FieldCard
 
-## Getting Started
+**Capture a job by voice → AI asks two sharp follow-up questions → compile a teachable card.**
 
-First, run the development server:
+A hackathon-scoped demo of the voice-debrief loop: a field technician describes a job they
+just finished, an LLM acts as a sharp supervisor and asks the two questions that surface the
+teachable knowledge a junior tech would miss, then compiles a reviewed, structured knowledge
+card from the answers.
+
+## Stack
+
+- **Next.js 16** (App Router) + TypeScript + Tailwind
+- **Deepgram** `nova-3` — speech-to-text
+- **Claude Sonnet 4.6** (`@anthropic-ai/sdk`, structured outputs) — debrief questions + card
+- **ElevenLabs** — optional text-to-speech ("Hear it")
+
+## Run it
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+pnpm install
+cp .env.example .env.local   # fill in your keys
+pnpm dev                     # http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Only `ANTHROPIC_API_KEY` is strictly required. Without `DEEPGRAM_API_KEY` you type notes
+instead of recording; without `ELEVENLABS_API_KEY` questions just show as text.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Demo script (~90s)
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+1. **Capture** — hit Record and describe a real job: *"Replaced a failed run capacitor on a
+   4-ton Carrier condenser — compressor was tripping on start, measured the cap at 28µF on a
+   45µF rating…"*
+2. **Debrief** — "Get debrief questions." Claude asks two specific questions (e.g. *"How did
+   you confirm the capacitor was the cause and not the contactor?"*). Hit **🔊 Hear it**.
+3. **Answer** — record your answers to both.
+4. **Compile** — out comes a structured teachable card: symptom, root cause, fix steps, tools,
+   and a safety note.
 
-## Learn More
+## How it works
 
-To learn more about Next.js, take a look at the following resources:
+```
+voice ─▶ /api/transcribe (Deepgram) ─▶ job note
+job note ─▶ /api/debrief (Sonnet, JSON schema) ─▶ 2 questions ─▶ /api/speak (ElevenLabs)
+job note + answers ─▶ /api/card (Sonnet, JSON schema) ─▶ TeachableCard
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+All LLM calls use Sonnet 4.6 with structured outputs (`output_config.format`) so the API
+returns schema-valid JSON — no brittle parsing. Swap `DEBRIEF_MODEL` in `src/lib/anthropic.ts`
+to `claude-opus-4-8` for maximum reasoning quality.

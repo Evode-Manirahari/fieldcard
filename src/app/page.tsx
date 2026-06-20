@@ -1,65 +1,330 @@
-import Image from "next/image";
+"use client";
+
+import { useRef, useState } from "react";
+import type { TeachableCard } from "@/lib/types";
+
+/** Minimal MediaRecorder wrapper. stop() resolves with the recorded Blob. */
+function useRecorder() {
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const [recording, setRecording] = useState(false);
+
+  async function start() {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const mr = new MediaRecorder(stream);
+    chunksRef.current = [];
+    mr.ondataavailable = (e) => {
+      if (e.data.size > 0) chunksRef.current.push(e.data);
+    };
+    mr.start();
+    recorderRef.current = mr;
+    setRecording(true);
+  }
+
+  function stop(): Promise<Blob> {
+    return new Promise((resolve) => {
+      const mr = recorderRef.current;
+      if (!mr) return resolve(new Blob());
+      mr.onstop = () => {
+        const blob = new Blob(chunksRef.current, { type: mr.mimeType || "audio/webm" });
+        mr.stream.getTracks().forEach((t) => t.stop());
+        setRecording(false);
+        resolve(blob);
+      };
+      mr.stop();
+    });
+  }
+
+  return { recording, start, stop };
+}
+
+async function transcribe(blob: Blob): Promise<string> {
+  const res = await fetch("/api/transcribe", {
+    method: "POST",
+    headers: { "Content-Type": blob.type || "audio/webm" },
+    body: blob,
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error ?? "Transcription failed.");
+  return data.transcript as string;
+}
+
+/** A textarea you can either type into or fill by recording your voice. */
+function VoiceField({
+  value,
+  onChange,
+  placeholder,
+  onError,
+  disabled,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder: string;
+  onError: (msg: string) => void;
+  disabled?: boolean;
+}) {
+  const { recording, start, stop } = useRecorder();
+  const [transcribing, setTranscribing] = useState(false);
+
+  async function toggle() {
+    try {
+      if (!recording) {
+        await start();
+        return;
+      }
+      const blob = await stop();
+      setTranscribing(true);
+      const text = await transcribe(blob);
+      onChange(value ? `${value} ${text}`.trim() : text);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : "Recording failed.");
+    } finally {
+      setTranscribing(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <textarea
+        className="min-h-28 w-full resize-y rounded-lg border border-zinc-300 bg-white p-3 text-sm text-zinc-900 outline-none focus:border-orange-500"
+        value={value}
+        placeholder={placeholder}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={disabled}
+      />
+      <button
+        type="button"
+        onClick={toggle}
+        disabled={disabled || transcribing}
+        className={`self-start rounded-full px-4 py-1.5 text-sm font-medium transition ${
+          recording
+            ? "bg-red-600 text-white hover:bg-red-700"
+            : "bg-zinc-900 text-white hover:bg-zinc-700"
+        } disabled:opacity-50`}
+      >
+        {transcribing ? "Transcribing…" : recording ? "■ Stop recording" : "● Record"}
+      </button>
+    </div>
+  );
+}
 
 export default function Home() {
+  const [jobNote, setJobNote] = useState("");
+  const [questions, setQuestions] = useState<string[]>([]);
+  const [answer, setAnswer] = useState("");
+  const [card, setCard] = useState<TeachableCard | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function getDebrief() {
+    setError(null);
+    setBusy("debrief");
+    try {
+      const res = await fetch("/api/debrief", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ transcript: jobNote }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Debrief failed.");
+      setQuestions(data.questions ?? []);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Debrief failed.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function hearQuestions() {
+    setError(null);
+    try {
+      const res = await fetch("/api/speak", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: questions.join(". ") }),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error ?? "Speech failed.");
+      }
+      const buf = await res.arrayBuffer();
+      const url = URL.createObjectURL(new Blob([buf], { type: "audio/mpeg" }));
+      await new Audio(url).play();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Speech failed.");
+    }
+  }
+
+  async function compileCard() {
+    setError(null);
+    setBusy("card");
+    try {
+      const debrief = questions
+        .map((q, i) => `Q${i + 1}: ${q}`)
+        .join("\n")
+        .concat(`\n\nTech's answers:\n${answer}`);
+      const res = await fetch("/api/card", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jobNote, debrief }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Card compile failed.");
+      setCard(data.card);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Card compile failed.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  function reset() {
+    setJobNote("");
+    setQuestions([]);
+    setAnswer("");
+    setCard(null);
+    setError(null);
+  }
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
+    <main className="mx-auto w-full max-w-2xl flex-1 px-5 py-12">
+      <header className="mb-8">
+        <h1 className="text-3xl font-bold tracking-tight text-zinc-900">
+          Field<span className="text-orange-600">Card</span>
+        </h1>
+        <p className="mt-1 text-sm text-zinc-600">
+          Capture a job by voice → AI asks two sharp questions → compile a teachable card.
+        </p>
+      </header>
+
+      {error && (
+        <div className="mb-6 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          {error}
+        </div>
+      )}
+
+      {/* Step 1 — capture the job */}
+      <section className="mb-6 rounded-xl border border-zinc-200 bg-white p-5 shadow-sm">
+        <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-zinc-500">
+          1 · Capture the job
+        </h2>
+        <p className="mb-3 text-sm text-zinc-600">
+          Describe what you just did, like you would to a coworker in the truck.
+        </p>
+        <VoiceField
+          value={jobNote}
+          onChange={setJobNote}
+          onError={setError}
+          placeholder="e.g. Replaced a failed run capacitor on a 4-ton Carrier condenser; compressor was tripping on start…"
         />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
+        <button
+          type="button"
+          onClick={getDebrief}
+          disabled={!jobNote.trim() || busy !== null}
+          className="mt-4 rounded-lg bg-orange-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-orange-700 disabled:opacity-50"
+        >
+          {busy === "debrief" ? "Thinking…" : "Get debrief questions"}
+        </button>
+      </section>
+
+      {/* Step 2 — answer the debrief */}
+      {questions.length > 0 && (
+        <section className="mb-6 rounded-xl border border-zinc-200 bg-white p-5 shadow-sm">
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">
+              2 · Answer the debrief
+            </h2>
+            <button
+              type="button"
+              onClick={hearQuestions}
+              className="text-xs font-medium text-orange-600 hover:underline"
             >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+              🔊 Hear it
+            </button>
+          </div>
+          <ol className="mb-4 list-decimal space-y-2 pl-5 text-sm text-zinc-800">
+            {questions.map((q, i) => (
+              <li key={i}>{q}</li>
+            ))}
+          </ol>
+          <VoiceField
+            value={answer}
+            onChange={setAnswer}
+            onError={setError}
+            placeholder="Answer both questions out loud…"
+          />
+          <button
+            type="button"
+            onClick={compileCard}
+            disabled={!answer.trim() || busy !== null}
+            className="mt-4 rounded-lg bg-orange-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-orange-700 disabled:opacity-50"
           >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
+            {busy === "card" ? "Compiling…" : "Compile teachable card"}
+          </button>
+        </section>
+      )}
+
+      {/* Result — the card */}
+      {card && (
+        <section className="mb-6 overflow-hidden rounded-xl border border-zinc-300 bg-white shadow-sm">
+          <div className="border-b border-zinc-200 bg-zinc-900 px-5 py-4">
+            <span className="rounded-full bg-orange-600 px-2 py-0.5 text-xs font-semibold text-white">
+              {card.trade}
+            </span>
+            <h2 className="mt-2 text-lg font-bold text-white">{card.title}</h2>
+          </div>
+          <dl className="space-y-4 p-5 text-sm">
+            <Field label="Symptom" value={card.symptom} />
+            <Field label="Root cause" value={card.rootCause} />
+            <div>
+              <dt className="font-semibold text-zinc-500">Fix steps</dt>
+              <ol className="mt-1 list-decimal space-y-1 pl-5 text-zinc-800">
+                {card.fixSteps.map((s, i) => (
+                  <li key={i}>{s}</li>
+                ))}
+              </ol>
+            </div>
+            {card.tools.length > 0 && (
+              <div>
+                <dt className="font-semibold text-zinc-500">Tools</dt>
+                <div className="mt-1 flex flex-wrap gap-1.5">
+                  {card.tools.map((t, i) => (
+                    <span
+                      key={i}
+                      className="rounded-full bg-zinc-100 px-2.5 py-0.5 text-xs text-zinc-700"
+                    >
+                      {t}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+            <div className="rounded-lg border border-red-200 bg-red-50 p-3">
+              <dt className="font-semibold text-red-700">⚠ Safety</dt>
+              <dd className="mt-0.5 text-red-900">{card.safetyNote}</dd>
+            </div>
+          </dl>
+        </section>
+      )}
+
+      {(jobNote || card) && (
+        <button
+          type="button"
+          onClick={reset}
+          className="text-sm text-zinc-500 hover:text-zinc-800 hover:underline"
+        >
+          ↺ Start over
+        </button>
+      )}
+    </main>
+  );
+}
+
+function Field({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <dt className="font-semibold text-zinc-500">{label}</dt>
+      <dd className="mt-0.5 text-zinc-800">{value}</dd>
     </div>
   );
 }
