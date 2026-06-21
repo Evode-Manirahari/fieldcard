@@ -1,7 +1,31 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { TeachableCard } from "@/lib/types";
+
+/** Pre-written jobs so the demo never depends on improvising or a live mic. */
+const SAMPLE_JOBS: { label: string; note: string; answer: string }[] = [
+  {
+    label: "Weak capacitor",
+    note: "Carrier 4-ton condenser — compressor was humming but not starting and tripping the breaker after a few seconds. Checked the run capacitor: rated 45 microfarads, measured 22. Swapped it and the unit started clean.",
+    answer:
+      "I knew it was the capacitor and not the contactor because the contactor was pulling in fine and I had line voltage on both sides. A weak cap reads low on the meter and you see the compressor try to start and stall. Safety: I discharged the capacitor with an insulated screwdriver before touching the terminals — they hold a charge even with the power off.",
+  },
+  {
+    label: "Frozen coil",
+    note: "No-cooling call. Indoor coil was a solid block of ice. Let it thaw, checked the filter — completely clogged. Airflow was choked so the coil dropped below freezing. Replaced the filter and confirmed the refrigerant charge was fine.",
+    answer:
+      "The tell that it was airflow and not low refrigerant was that the whole coil iced evenly and the filter was black. Low charge usually ices up starting at the metering device first. I told the customer to change the filter every 90 days. Safety: I shut the system off and let it thaw fully before restarting so I didn't slug the compressor with liquid.",
+  },
+  {
+    label: "No heat",
+    note: "Gas furnace, no-heat call. Inducer ran but no ignition. Found the flame sensor coated in white residue. Cleaned it with steel wool, furnace lit and stayed lit.",
+    answer:
+      "A dirty flame sensor lets the furnace light then drop out after a few seconds because it can't prove flame — that's the giveaway versus a bad igniter, where it never lights at all. I cleaned it lightly with steel wool, not sandpaper, so I didn't gouge the rod. Safety: I shut off the gas and killed power at the switch before pulling the sensor.",
+  },
+];
+
+const SAVED_KEY = "fieldcard.saved.v1";
 
 /** Minimal MediaRecorder wrapper. stop() resolves with the recorded Blob. */
 function useRecorder() {
@@ -112,9 +136,39 @@ export default function Home() {
   const [jobNote, setJobNote] = useState("");
   const [questions, setQuestions] = useState<string[]>([]);
   const [answer, setAnswer] = useState("");
+  const [sampleAnswer, setSampleAnswer] = useState("");
   const [card, setCard] = useState<TeachableCard | null>(null);
+  const [saved, setSaved] = useState<TeachableCard[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // Load the saved-card library from this browser.
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(SAVED_KEY);
+      if (raw) setSaved(JSON.parse(raw));
+    } catch {
+      // ignore malformed storage
+    }
+  }, []);
+
+  function persist(next: TeachableCard[]) {
+    setSaved(next);
+    try {
+      localStorage.setItem(SAVED_KEY, JSON.stringify(next));
+    } catch {
+      // ignore quota / private-mode errors
+    }
+  }
+
+  function loadSample(s: (typeof SAMPLE_JOBS)[number]) {
+    setError(null);
+    setQuestions([]);
+    setAnswer("");
+    setCard(null);
+    setJobNote(s.note);
+    setSampleAnswer(s.answer);
+  }
 
   async function getDebrief() {
     setError(null);
@@ -171,6 +225,7 @@ export default function Home() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Card compile failed.");
       setCard(data.card);
+      if (data.card) persist([data.card, ...saved]);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Card compile failed.");
     } finally {
@@ -182,6 +237,7 @@ export default function Home() {
     setJobNote("");
     setQuestions([]);
     setAnswer("");
+    setSampleAnswer("");
     setCard(null);
     setError(null);
   }
@@ -217,6 +273,19 @@ export default function Home() {
           onError={setError}
           placeholder="e.g. Replaced a failed run capacitor on a 4-ton Carrier condenser; compressor was tripping on start…"
         />
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <span className="text-xs text-zinc-400">Try a sample:</span>
+          {SAMPLE_JOBS.map((s) => (
+            <button
+              key={s.label}
+              type="button"
+              onClick={() => loadSample(s)}
+              className="rounded-full border border-zinc-300 px-3 py-1 text-xs text-zinc-700 transition hover:border-orange-500 hover:text-orange-600"
+            >
+              {s.label}
+            </button>
+          ))}
+        </div>
         <button
           type="button"
           onClick={getDebrief}
@@ -253,59 +322,30 @@ export default function Home() {
             onError={setError}
             placeholder="Answer both questions out loud…"
           />
-          <button
-            type="button"
-            onClick={compileCard}
-            disabled={!answer.trim() || busy !== null}
-            className="mt-4 rounded-lg bg-orange-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-orange-700 disabled:opacity-50"
-          >
-            {busy === "card" ? "Compiling…" : "Compile teachable card"}
-          </button>
+          {sampleAnswer && answer !== sampleAnswer && (
+            <button
+              type="button"
+              onClick={() => setAnswer(sampleAnswer)}
+              className="mt-2 text-xs text-zinc-500 hover:text-orange-600 hover:underline"
+            >
+              ↳ fill the sample answer
+            </button>
+          )}
+          <div>
+            <button
+              type="button"
+              onClick={compileCard}
+              disabled={!answer.trim() || busy !== null}
+              className="mt-4 rounded-lg bg-orange-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-orange-700 disabled:opacity-50"
+            >
+              {busy === "card" ? "Compiling…" : "Compile teachable card"}
+            </button>
+          </div>
         </section>
       )}
 
       {/* Result — the card */}
-      {card && (
-        <section className="mb-6 overflow-hidden rounded-xl border border-zinc-300 bg-white shadow-sm">
-          <div className="border-b border-zinc-200 bg-zinc-900 px-5 py-4">
-            <span className="rounded-full bg-orange-600 px-2 py-0.5 text-xs font-semibold text-white">
-              {card.trade}
-            </span>
-            <h2 className="mt-2 text-lg font-bold text-white">{card.title}</h2>
-          </div>
-          <dl className="space-y-4 p-5 text-sm">
-            <Field label="Symptom" value={card.symptom} />
-            <Field label="Root cause" value={card.rootCause} />
-            <div>
-              <dt className="font-semibold text-zinc-500">Fix steps</dt>
-              <ol className="mt-1 list-decimal space-y-1 pl-5 text-zinc-800">
-                {card.fixSteps.map((s, i) => (
-                  <li key={i}>{s}</li>
-                ))}
-              </ol>
-            </div>
-            {card.tools.length > 0 && (
-              <div>
-                <dt className="font-semibold text-zinc-500">Tools</dt>
-                <div className="mt-1 flex flex-wrap gap-1.5">
-                  {card.tools.map((t, i) => (
-                    <span
-                      key={i}
-                      className="rounded-full bg-zinc-100 px-2.5 py-0.5 text-xs text-zinc-700"
-                    >
-                      {t}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-            <div className="rounded-lg border border-red-200 bg-red-50 p-3">
-              <dt className="font-semibold text-red-700">⚠ Safety</dt>
-              <dd className="mt-0.5 text-red-900">{card.safetyNote}</dd>
-            </div>
-          </dl>
-        </section>
-      )}
+      {card && <CardView card={card} />}
 
       {(jobNote || card) && (
         <button
@@ -316,7 +356,85 @@ export default function Home() {
           ↺ Start over
         </button>
       )}
+
+      {/* Saved library — cards accumulate into a knowledge base */}
+      {saved.length > 0 && (
+        <section className="mt-10 border-t border-zinc-200 pt-6">
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">
+              Knowledge base · {saved.length} card{saved.length === 1 ? "" : "s"}
+            </h2>
+            <button
+              type="button"
+              onClick={() => persist([])}
+              className="text-xs text-zinc-400 hover:text-red-600 hover:underline"
+            >
+              Clear
+            </button>
+          </div>
+          <ul className="space-y-1.5">
+            {saved.map((c, i) => (
+              <li key={i}>
+                <button
+                  type="button"
+                  onClick={() => setCard(c)}
+                  className="flex w-full items-center gap-2 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-left text-sm transition hover:border-orange-400"
+                >
+                  <span className="rounded-full bg-orange-100 px-2 py-0.5 text-xs font-medium text-orange-700">
+                    {c.trade}
+                  </span>
+                  <span className="truncate text-zinc-800">{c.title}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
     </main>
+  );
+}
+
+function CardView({ card }: { card: TeachableCard }) {
+  return (
+    <section className="mb-6 overflow-hidden rounded-xl border border-zinc-300 bg-white shadow-sm">
+      <div className="border-b border-zinc-200 bg-zinc-900 px-5 py-4">
+        <span className="rounded-full bg-orange-600 px-2 py-0.5 text-xs font-semibold text-white">
+          {card.trade}
+        </span>
+        <h2 className="mt-2 text-lg font-bold text-white">{card.title}</h2>
+      </div>
+      <dl className="space-y-4 p-5 text-sm">
+        <Field label="Symptom" value={card.symptom} />
+        <Field label="Root cause" value={card.rootCause} />
+        <div>
+          <dt className="font-semibold text-zinc-500">Fix steps</dt>
+          <ol className="mt-1 list-decimal space-y-1 pl-5 text-zinc-800">
+            {card.fixSteps.map((s, i) => (
+              <li key={i}>{s}</li>
+            ))}
+          </ol>
+        </div>
+        {card.tools.length > 0 && (
+          <div>
+            <dt className="font-semibold text-zinc-500">Tools</dt>
+            <div className="mt-1 flex flex-wrap gap-1.5">
+              {card.tools.map((t, i) => (
+                <span
+                  key={i}
+                  className="rounded-full bg-zinc-100 px-2.5 py-0.5 text-xs text-zinc-700"
+                >
+                  {t}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+        <div className="rounded-lg border border-red-200 bg-red-50 p-3">
+          <dt className="font-semibold text-red-700">⚠ Safety</dt>
+          <dd className="mt-0.5 text-red-900">{card.safetyNote}</dd>
+        </div>
+      </dl>
+    </section>
   );
 }
 
