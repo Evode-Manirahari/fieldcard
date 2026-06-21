@@ -1,5 +1,8 @@
 import { getAnthropic, DEBRIEF_MODEL } from "@/lib/anthropic";
 
+// Give the serverless function headroom for the model round-trip.
+export const maxDuration = 30;
+
 const QUESTIONS_SCHEMA = {
   type: "object",
   additionalProperties: false,

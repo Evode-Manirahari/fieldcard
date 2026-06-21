@@ -1,5 +1,8 @@
 import type { NextRequest } from "next/server";
 
+// Give the serverless function headroom for the Deepgram round-trip.
+export const maxDuration = 30;
+
 // Speech-to-text via Deepgram (nova-3), matching the ACT voice stack.
 // The client POSTs the raw audio blob as the request body.
 export async function POST(req: NextRequest) {

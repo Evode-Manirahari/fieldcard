@@ -1,3 +1,6 @@
+// Give the serverless function headroom for the ElevenLabs round-trip.
+export const maxDuration = 30;
+
 // Optional text-to-speech via ElevenLabs, matching the ACT voice stack.
 // Returns audio/mpeg the browser can play. Degrades gracefully when no key is set.
 export async function POST(req: Request) {
